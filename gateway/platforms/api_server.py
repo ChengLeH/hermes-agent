@@ -3207,11 +3207,8 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
                 await queue.put(_event_payload("run.completed", completed_payload))
                 self._set_run_status(
                     run_id, "completed", session_id=effective_session_id,
-                    # The reply text, so a caller whose stream died — a sleeping laptop, a
-                    # dropped link — can still read it from GET /v1/runs/{run_id}. POST
-                    # /v1/runs already records output here (api_server_runs.py `_finish`);
-                    # this route put the text only on the SSE queue, which left a partial
-                    # answer indistinguishable from a clean one, and unrecoverable either way.
+                    # `output` mirrors /v1/runs: a client whose stream died recovers the reply
+                    # from GET /v1/runs/{run_id} instead of paying for a second turn (#111728).
                     output=final_response, usage=usage,
                     last_event="run.completed",
                     **({"pending_steer": pending_steer} if pending_steer else {}))
