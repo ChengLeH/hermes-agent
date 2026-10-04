@@ -141,3 +141,70 @@ def guard_remote_process_command(argv: list[str], *, home: str | None = None) ->
     if value is not None and not isinstance(value, str):
         raise PermissionError("Write-boundary provider returned invalid remote command")
     return value
+
+
+# Compatibility for deployments that still register the earlier Core boundary.
+# New profiles use the plugin provider; both layers apply when both are present.
+from tools import write_boundary_legacy as _legacy
+
+register_protected_basenames = _legacy.register_protected_basenames
+clear_protected_basenames = _legacy.clear_protected_basenames
+register_official_writer = _legacy.register_official_writer
+clear_official_writers = _legacy.clear_official_writers
+official_exec_argv = _legacy.official_exec_argv
+official_writer_command = _legacy.official_writer_command
+command_write_targets = _legacy.command_write_targets
+prelude = _legacy.prelude
+
+_provider_protected_basenames = protected_basenames
+_provider_refuse_paths = refuse_paths
+_provider_refuse_command = refuse_command
+_provider_guard_command = guard_command
+_provider_wrap_code = wrap_code
+_provider_guard_process_argv = guard_process_argv
+_provider_guard_remote_process_command = guard_remote_process_command
+
+
+def protected_basenames(home: str | None = None) -> frozenset[str]:
+    return _provider_protected_basenames(home) | _legacy.protected_basenames(home)
+
+
+def refuse_paths(paths, home: str | None = None) -> str | None:
+    return _provider_refuse_paths(paths, home) or _legacy.refuse_paths(paths, home)
+
+
+def refuse_command(command: str, home: str | None = None) -> str | None:
+    return _provider_refuse_command(command, home) or _legacy.refuse_command(command, home)
+
+
+def guard_command(command: str, *, env_type: str, home: str | None = None) -> str | None:
+    guarded = _provider_guard_command(command, env_type=env_type, home=home)
+    if guarded is None:
+        return None
+    return _legacy.guard_command(guarded, env_type=env_type, home=home)
+
+
+def wrap_code(code: str, home: str | None = None) -> str:
+    return _legacy.wrap_code(_provider_wrap_code(code, home), home)
+
+
+def guard_process_argv(argv: list[str], *, home: str | None = None) -> list[str] | None:
+    guarded = _provider_guard_process_argv(argv, home=home)
+    if guarded is None:
+        return None
+    names = _legacy.protected_basenames(home)
+    if not names:
+        return guarded
+    from tools.authority_os_guard import posix_spawn_argv
+    return posix_spawn_argv(guarded, names)
+
+
+def guard_remote_process_command(argv: list[str], *, home: str | None = None) -> str | None:
+    guarded = _provider_guard_remote_process_command(argv, home=home)
+    if guarded is None:
+        return None
+    names = _legacy.protected_basenames(home)
+    if not names:
+        return guarded
+    from tools.authority_os_guard import linux_argv_command
+    return linux_argv_command(["sh", "-c", guarded], names)
