@@ -1599,9 +1599,19 @@ class TestRunIdempotency:
         _use_idempotency_db(adapter, tmp_path / "idem.db")
         app = _create_runs_app(adapter)
         entered = asyncio.Event()
+        second_lookup = asyncio.Event()
         release = asyncio.Event()
         acquire_calls = 0
         original_acquire = runs._acquire_run_lease_or_response
+        original_lookup = adapter._run_idempotency_store.lookup
+        lookup_calls = 0
+
+        def observed_lookup(*args, **kwargs):
+            nonlocal lookup_calls
+            lookup_calls += 1
+            if lookup_calls == 2:
+                second_lookup.set()
+            return original_lookup(*args, **kwargs)
 
         async def gated_acquire(*args, **kwargs):
             nonlocal acquire_calls
@@ -1610,7 +1620,9 @@ class TestRunIdempotency:
             await release.wait()
             return await original_acquire(*args, **kwargs)
 
-        with patch.object(runs, "_acquire_run_lease_or_response", gated_acquire):
+        with patch.object(runs, "_acquire_run_lease_or_response", gated_acquire), patch.object(
+            adapter._run_idempotency_store, "lookup", observed_lookup
+        ):
             async with TestClient(TestServer(app)) as cli:
                 with patch.object(adapter, "_create_agent") as create:
                     agent = MagicMock()
@@ -1628,9 +1640,9 @@ class TestRunIdempotency:
                         return response.status, await response.json()
 
                     first = asyncio.create_task(post())
-                    await asyncio.wait_for(entered.wait(), 3)
+                    await asyncio.wait_for(entered.wait(), 10)
                     second = asyncio.create_task(post())
-                    await asyncio.sleep(0.05)
+                    await asyncio.wait_for(second_lookup.wait(), 10)
                     assert acquire_calls == 1
                     release.set()
                     results = await asyncio.gather(first, second)
