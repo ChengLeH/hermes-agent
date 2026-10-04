@@ -788,7 +788,7 @@ class TestRunEvents:
 
     @pytest.mark.asyncio
     async def test_approval_resolve_all_is_scoped_to_target_run(self, auth_adapter):
-        """Same client session_id must not let one run approve another run's queue."""
+        """One run must not approve another run's queue."""
         app = _create_runs_app(auth_adapter)
         async with TestClient(TestServer(app)) as cli:
             with patch.object(auth_adapter, "_create_agent") as mock_create:
@@ -803,7 +803,7 @@ class TestRunEvents:
                 )
                 attacker_resp = await cli.post(
                     "/v1/runs",
-                    json={"input": "attacker", "session_id": "shared-project"},
+                    json={"input": "attacker", "session_id": "other-project"},
                     headers={"Authorization": "Bearer sk-secret"},
                 )
                 assert victim_resp.status == 202
@@ -1591,6 +1591,51 @@ class TestRunIdempotency:
                 assert len({body["run_id"] for _, body in results}) == 1
                 await asyncio.sleep(0.15)
         assert calls == 1
+
+    @pytest.mark.asyncio
+    async def test_same_session_retry_waits_for_first_key_reservation(self, adapter, tmp_path):
+        from gateway.platforms import api_server_runs as runs
+
+        _use_idempotency_db(adapter, tmp_path / "idem.db")
+        app = _create_runs_app(adapter)
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        acquire_calls = 0
+        original_acquire = runs._acquire_run_lease_or_response
+
+        async def gated_acquire(*args, **kwargs):
+            nonlocal acquire_calls
+            acquire_calls += 1
+            entered.set()
+            await release.wait()
+            return await original_acquire(*args, **kwargs)
+
+        with patch.object(runs, "_acquire_run_lease_or_response", gated_acquire):
+            async with TestClient(TestServer(app)) as cli:
+                with patch.object(adapter, "_create_agent") as create:
+                    agent = MagicMock()
+                    agent.run_conversation.return_value = {"final_response": "done"}
+                    agent.session_prompt_tokens = agent.session_completion_tokens = (
+                        agent.session_total_tokens
+                    ) = 0
+                    create.return_value = agent
+
+                    async def post():
+                        response = await cli.post(
+                            "/v1/runs", json={"input": "race", "session_id": "same-session"},
+                            headers={"Idempotency-Key": "same-session-race"},
+                        )
+                        return response.status, await response.json()
+
+                    first = asyncio.create_task(post())
+                    await asyncio.wait_for(entered.wait(), 3)
+                    second = asyncio.create_task(post())
+                    await asyncio.sleep(0.05)
+                    assert acquire_calls == 1
+                    release.set()
+                    results = await asyncio.gather(first, second)
+                    assert [status for status, _ in results] == [202, 202]
+                    assert results[0][1]["run_id"] == results[1][1]["run_id"]
 
     def test_restart_durability_and_terminal_semantics(self, tmp_path):
         from gateway.platforms.api_server_run_idempotency import RunIdempotencyStore

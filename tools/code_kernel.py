@@ -264,7 +264,7 @@ class CellAuthority:
         return self.ctx.run(self._invoke, tool_name, tool_args)
 
     def _invoke(self, tool_name: str, tool_args: dict) -> str:
-        from model_tools import handle_function_call
+        from tools.code_execution_rpc import _default_dispatch
         previous = None
         if self._callbacks:
             try:
@@ -274,7 +274,10 @@ class CellAuthority:
             except Exception:
                 previous = None
         try:
-            return handle_function_call(tool_name, tool_args, task_id=self.task_id)
+            # Use the same host-bound session identity as per-call code RPC.
+            # The captured ContextVar belongs to this cell; untrusted script
+            # arguments cannot replace it, even after another cell starts.
+            return _default_dispatch(self.task_id)(tool_name, tool_args)
         finally:
             if previous is not None:
                 try:
@@ -638,14 +641,11 @@ def _spawn(kernel: SessionKernel, *, child_python: str, child_cwd: str,
     try:
         child_argv = [child_python, os.path.join(kernel.tmpdir, "hermes_kernel_runner.py")]
         if not _IS_WINDOWS:
-            from tools.write_boundary import protected_basenames
-            names = protected_basenames()
-            if names:
-                from tools.authority_os_guard import posix_spawn_argv
-                guarded_argv = posix_spawn_argv(child_argv, names)
-                if guarded_argv is None:
-                    raise OSError("Authority write boundary is unavailable. Refusing to start an unguarded execute_code kernel.")
-                child_argv = guarded_argv
+            from tools.write_boundary import guard_process_argv
+            guarded_argv = guard_process_argv(child_argv)
+            if guarded_argv is None:
+                raise OSError("Write boundary is unavailable. Refusing to start an unguarded execute_code kernel.")
+            child_argv = guarded_argv
         kernel.proc = subprocess.Popen(
             child_argv,
             # Strict mode passes an empty cwd: the kernel's staging dir plays the per-call tmpdir's role.

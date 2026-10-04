@@ -107,6 +107,11 @@ def _install_plugin_debug_handler(force: bool = False) -> None:
 _install_plugin_debug_handler()
 
 VALID_HOOKS: Set[str] = {
+    # Generic provider for file/process write policy; names and OS wrappers live in plugins.
+    "write_boundary_provider",
+    # Optional model-picker catalog sources. The picker remains functional if
+    # a provider plugin is absent or slow.
+    "picker_model_catalog",
     "pre_tool_call", "post_tool_call", "transform_terminal_output", "transform_tool_result",
     # transform_llm_output: return a replacement string (first non-None wins) or None.
     "transform_llm_output", "pre_llm_call", "post_llm_call",

@@ -911,6 +911,23 @@ def build_execute_code_schema(enabled_sandbox_tools: set = None,
     if mode is None:
         mode = _get_execution_mode()
     tool_lines = "\n".join(doc for name, doc in _TOOL_DOC_LINES if name in enabled_sandbox_tools)
+    documented = {name for name, _ in _TOOL_DOC_LINES}
+    # User plugins may opt into the authenticated code RPC. Keep their names
+    # visible to the model without trusting plugin-provided prompt text here.
+    plugin_names = []
+    for name in sorted(enabled_sandbox_tools - documented):
+        if not isinstance(name, str) or not name.isidentifier() or keyword.iskeyword(name):
+            continue
+        entry = registry.get_entry(name)
+        if entry is not None and entry.allow_code_execution is True:
+            plugin_names.append(name)
+    if plugin_names:
+        shown = plugin_names[:32]
+        tool_lines += "\n" + "\n".join(
+            f"  {name}(**kwargs) -> dict  # registered plugin tool" for name in shown
+        )
+        if len(plugin_names) > len(shown):
+            tool_lines += f"\n  ... and {len(plugin_names) - len(shown)} more plugin tools"
     import_examples = [n for n in ("web_search", "terminal") if n in enabled_sandbox_tools]
     import_examples = import_examples or sorted(enabled_sandbox_tools)[:2]
     import_str = ", ".join(import_examples) + ", ..." if import_examples else "..."

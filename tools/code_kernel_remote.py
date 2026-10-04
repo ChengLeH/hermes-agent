@@ -233,12 +233,10 @@ def _spawn_remote_kernel(env, env_type: str, owner: str, task_env_id: str,
         # lifetime. runner.log is pre-created 600 so the launch redirect never
         # lands at the remote's default umask. The inner `&` stays inside the
         # subshell where `$!` resolves to the runner pid.
-        from tools.write_boundary import protected_basenames
-        names = protected_basenames()
-        runner = "python3 kernel_runner.py"
-        if names:
-            from tools.authority_os_guard import linux_argv_command
-            runner = linux_argv_command(["python3", "kernel_runner.py"], names)
+        from tools.write_boundary import guard_remote_process_command
+        runner = guard_remote_process_command(["python3", "kernel_runner.py"])
+        if runner is None:
+            raise OSError("Write boundary is unavailable. Refusing to start an unguarded remote kernel.")
         launch_cmd = _ship_env_file_and_launch(
             env, kernel_dir, "kernel.env",
             "rm -f ./kernel.env && touch runner.log && chmod 600 runner.log && "
